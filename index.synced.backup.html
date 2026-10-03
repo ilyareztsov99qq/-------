@@ -1097,8 +1097,8 @@
     <!-- ================= ПОЛНЫЙ СКРИПТОВЫЙ ДВИЖОК ================= -->
     <script>
         /* ================= НАСТРОЙКИ ОБЛАКА (SUPABASE) ================= */
-        const SUPABASE_URL = "https://fjltndvonzrohyliflyd.supabase.co";
-        const SUPABASE_ANON_KEY = "sb_publishable_1_zIHBKWYqGTuNOPbfYsqg_kXVqjxr_";
+        const SUPABASE_URL = "ВСТАВЬТЕ_СЮДА_PROJECT_URL";
+        const SUPABASE_ANON_KEY = "ВСТАВЬТЕ_СЮДА_ANON_KEY";
 
         let supabaseClient = null;
         let syncKey = localStorage.getItem('lifeOS_sync_key') || '';
@@ -1120,13 +1120,7 @@
             const current = syncKey || '';
             const key = prompt('Введите секретный ключ синхронизации для 3 устройств (любое уникальное слово):', current);
             if (key !== null) {
-                const newKey = key.trim();
-                if (newKey !== syncKey) {
-                    // Ключ изменился — сбрасываем локальную версию данных,
-                    // иначе сравнение updatedAt с новой облачной строкой будет ложным.
-                    localStorage.removeItem('lifeOS_sync_updated_at');
-                }
-                syncKey = newKey;
+                syncKey = key.trim();
                 localStorage.setItem('lifeOS_sync_key', syncKey);
                 if (syncKey) initCloudSync();
                 else updateCloudUI("☁️ Офлайн");
@@ -1166,17 +1160,6 @@
                     localStorage.setItem('lifeOS_checked_groceries', data.groceriesChecked);
                     checkedGroceries = JSON.parse(data.groceriesChecked);
                 }
-                if (data.theme === 'dark' || data.theme === 'light') {
-                    localStorage.setItem('lifeOS_theme', data.theme);
-                    const dark = data.theme === 'dark';
-                    document.body.classList.toggle('dark-mode', dark);
-                    updateThemeButtons(dark);
-                }
-                // Фиксируем версию применённых данных, чтобы при следующей
-                // загрузке корректно сравнивать локальную и облачную версию.
-                if (data.updatedAt) {
-                    localStorage.setItem('lifeOS_sync_updated_at', String(data.updatedAt));
-                }
 
                 const savedFitness = JSON.parse(localStorage.getItem('smartFitnessDataOrig') || 'null');
                 if (savedFitness) {
@@ -1199,48 +1182,26 @@
         }
 
         let pushTimeout = null;
-        let lastPushedAt = 0;
-
-        async function doPushToCloud() {
-            if (!supabaseClient || !syncKey) return;
-            try {
-                const payload = getAppStatePayload();
-                lastPushedAt = payload.updatedAt;
-                const { error } = await supabaseClient
-                    .from('user_data')
-                    .upsert({ sync_key: syncKey, payload: payload, updated_at: new Date() });
-                if (error) throw error;
-                localStorage.setItem('lifeOS_sync_updated_at', String(payload.updatedAt));
-                updateCloudUI("☁️ Синхронно", "var(--success)");
-            } catch (err) {
-                console.error('Ошибка облака:', err);
-                updateCloudUI("⚠️ Ошибка сети", "var(--danger)");
-            }
-        }
-
         function pushChangesToCloud() {
             if (isRemoteUpdating || !supabaseClient || !syncKey) return;
 
             updateCloudUI("☁️ Запись...", "var(--warning)");
             clearTimeout(pushTimeout);
-            pushTimeout = setTimeout(() => {
-                pushTimeout = null;
-                doPushToCloud();
+            pushTimeout = setTimeout(async () => {
+                try {
+                    const payload = getAppStatePayload();
+                    const { error } = await supabaseClient
+                        .from('user_data')
+                        .upsert({ sync_key: syncKey, payload: payload, updated_at: new Date() });
+
+                    if (error) throw error;
+                    updateCloudUI("☁️ Синхронно", "var(--success)");
+                } catch (err) {
+                    console.error('Ошибка облака:', err);
+                    updateCloudUI("⚠️ Ошибка сети", "var(--danger)");
+                }
             }, 500);
         }
-
-        // Немедленно отправляем правку, не дожидаясь дебаунса, если вкладка
-        // скрывается/закрывается — иначе 500-мс задержка теряет изменения.
-        function flushPendingPush() {
-            if (pushTimeout === null) return;
-            clearTimeout(pushTimeout);
-            pushTimeout = null;
-            doPushToCloud();
-        }
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') flushPendingPush();
-        });
-        window.addEventListener('pagehide', flushPendingPush);
 
         async function initCloudSync() {
             if (!supabaseClient || !syncKey) {
@@ -1257,43 +1218,30 @@
                     .eq('sync_key', syncKey)
                     .maybeSingle();
 
-                const cloud = (data && data.payload) ? data.payload : null;
-                const localUpdatedAt = Number(localStorage.getItem('lifeOS_sync_updated_at') || 0);
-                const cloudUpdatedAt = cloud ? Number(cloud.updatedAt || 0) : 0;
-
-                if (cloud && cloudUpdatedAt >= localUpdatedAt) {
-                    // Облачная версия новее или равна локальной — применяем её.
-                    applyAppStatePayload(cloud);
+                if (data && data.payload) {
+                    applyAppStatePayload(data.payload);
                     updateCloudUI("☁️ Синхронно", "var(--success)");
                 } else {
-                    // Локальные данные новее (правки офлайн) или облака ещё нет —
-                    // отправляем их в облако, чтобы не потерять изменения.
                     pushChangesToCloud();
                 }
             } catch (err) {
-                // Сетевая ошибка: НЕ затираем локальные данные облачными.
-                console.warn('Не удалось загрузить из облака:', err);
-                updateCloudUI("⚠️ Ошибка сети", "var(--danger)");
+                console.warn('Новая запись:', err);
+                pushChangesToCloud();
             }
 
             // Слушатель реального времени для синхронизации устройств.
-            // event: '*' — ловим и INSERT (создание строки другим устройством),
-            // и UPDATE. Перед подпиской отписываемся от старого канала, чтобы
-            // не плодить дубли обработчиков.
+            // Перед подпиской отписываемся от старого канала, чтобы не плодить дубли обработчиков.
             if (syncChannel) supabaseClient.removeChannel(syncChannel);
             syncChannel = supabaseClient
                 .channel(`sync_${syncKey}`)
                 .on(
                     'postgres_changes',
-                    { event: '*', schema: 'public', table: 'user_data', filter: `sync_key=eq.${syncKey}` },
-                    (msg) => {
-                        const incoming = (msg.payload && msg.payload.new) ? msg.payload.new.payload : null;
-                        if (!incoming) return;
-                        // Пропускаем эхо собственной записи: такой же updatedAt
-                        // мы уже отправили и сохранили локально.
-                        if (Number(incoming.updatedAt || 0) === lastPushedAt) return;
-                        applyAppStatePayload(incoming);
-                        updateCloudUI("☁️ Синхронно", "var(--success)");
+                    { event: 'UPDATE', schema: 'public', table: 'user_data', filter: `sync_key=eq.${syncKey}` },
+                    (payload) => {
+                        if (payload.new && payload.new.payload) {
+                            applyAppStatePayload(payload.new.payload);
+                            updateCloudUI("☁️ Синхронно", "var(--success)");
+                        }
                     }
                 )
                 .subscribe();

@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Дневник</title>
-    <!-- Подключение Supabase SDK -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         /* ================= ДИЗАЙН-СИСТЕМА И ПЕРЕМЕННЫЕ ================= */
         :root {
@@ -741,7 +739,6 @@
     <div class="mobile-header">
         <h3>Дневник <span class="brand-badge" style="font-size: 10px; margin-left: 4px;">PRO</span></h3>
         <div class="mobile-header-actions">
-            <button class="btn-secondary" onclick="promptSyncKey()" id="mobile-cloud-btn" style="padding: 7px 10px; font-size: 11.5px;">☁️ Офлайн</button>
             <button class="btn-secondary" onclick="toggleTheme()" id="mobile-theme-btn" style="padding: 7px 11px;">🌙</button>
             <button class="btn-secondary" onclick="exportFullBackup()" style="padding: 7px 11px;">💾</button>
         </div>
@@ -761,7 +758,6 @@
             </div>
         </div>
         <div class="sidebar-footer">
-            <button class="btn-secondary" style="width:100%; font-size:12.5px; margin-bottom:8px;" onclick="promptSyncKey()" id="desktop-cloud-btn">☁️ Облако: Офлайн</button>
             <div style="display: flex; gap: 8px;">
                 <button class="btn-secondary" style="flex:1;" onclick="toggleTheme()" id="desktop-theme-btn">🌙 Тема</button>
                 <button class="btn-secondary" style="flex:1;" onclick="exportFullBackup()">💾 Бэкап</button>
@@ -1096,209 +1092,6 @@
 
     <!-- ================= ПОЛНЫЙ СКРИПТОВЫЙ ДВИЖОК ================= -->
     <script>
-        /* ================= НАСТРОЙКИ ОБЛАКА (SUPABASE) ================= */
-        const SUPABASE_URL = "https://fjltndvonzrohyliflyd.supabase.co";
-        const SUPABASE_ANON_KEY = "sb_publishable_1_zIHBKWYqGTuNOPbfYsqg_kXVqjxr_";
-
-        let supabaseClient = null;
-        let syncKey = localStorage.getItem('lifeOS_sync_key') || '';
-        let isRemoteUpdating = false;
-        let syncChannel = null;
-
-        if (typeof supabase !== 'undefined' && SUPABASE_URL.startsWith('http')) {
-            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        }
-
-        function updateCloudUI(text, color) {
-            const mob = document.getElementById('mobile-cloud-btn');
-            const desk = document.getElementById('desktop-cloud-btn');
-            if (mob) { mob.textContent = text; if (color) mob.style.color = color; }
-            if (desk) { desk.textContent = text; if (color) desk.style.color = color; }
-        }
-
-        function promptSyncKey() {
-            const current = syncKey || '';
-            const key = prompt('Введите секретный ключ синхронизации для 3 устройств (любое уникальное слово):', current);
-            if (key !== null) {
-                const newKey = key.trim();
-                if (newKey !== syncKey) {
-                    // Ключ изменился — сбрасываем локальную версию данных,
-                    // иначе сравнение updatedAt с новой облачной строкой будет ложным.
-                    localStorage.removeItem('lifeOS_sync_updated_at');
-                }
-                syncKey = newKey;
-                localStorage.setItem('lifeOS_sync_key', syncKey);
-                if (syncKey) initCloudSync();
-                else updateCloudUI("☁️ Офлайн");
-            }
-        }
-
-        function getAppStatePayload() {
-            return {
-                fitness: localStorage.getItem('smartFitnessDataOrig'),
-                fitnessEaten: localStorage.getItem('lifeOS_eaten_meals'),
-                finance: localStorage.getItem('lifeOS_fin_data'),
-                habits: localStorage.getItem('lifeOS_habits_data'),
-                groceriesChecked: localStorage.getItem('lifeOS_checked_groceries'),
-                theme: localStorage.getItem('lifeOS_theme'),
-                updatedAt: Date.now()
-            };
-        }
-
-        function applyAppStatePayload(data) {
-            if (!data) return;
-            isRemoteUpdating = true;
-            try {
-                if (data.fitness) localStorage.setItem('smartFitnessDataOrig', data.fitness);
-                if (data.fitnessEaten) {
-                    localStorage.setItem('lifeOS_eaten_meals', data.fitnessEaten);
-                    eatenMealsState = JSON.parse(data.fitnessEaten);
-                }
-                if (data.finance) {
-                    localStorage.setItem('lifeOS_fin_data', data.finance);
-                    financeState = JSON.parse(data.finance);
-                }
-                if (data.habits) {
-                    localStorage.setItem('lifeOS_habits_data', data.habits);
-                    habitsState = JSON.parse(data.habits);
-                }
-                if (data.groceriesChecked) {
-                    localStorage.setItem('lifeOS_checked_groceries', data.groceriesChecked);
-                    checkedGroceries = JSON.parse(data.groceriesChecked);
-                }
-                if (data.theme === 'dark' || data.theme === 'light') {
-                    localStorage.setItem('lifeOS_theme', data.theme);
-                    const dark = data.theme === 'dark';
-                    document.body.classList.toggle('dark-mode', dark);
-                    updateThemeButtons(dark);
-                }
-                // Фиксируем версию применённых данных, чтобы при следующей
-                // загрузке корректно сравнивать локальную и облачную версию.
-                if (data.updatedAt) {
-                    localStorage.setItem('lifeOS_sync_updated_at', String(data.updatedAt));
-                }
-
-                const savedFitness = JSON.parse(localStorage.getItem('smartFitnessDataOrig') || 'null');
-                if (savedFitness) {
-                    document.getElementById('height').value = savedFitness.height || '';
-                    document.getElementById('weight').value = savedFitness.weight || '';
-                    document.getElementById('goal').value = savedFitness.goal || 'maintain';
-                    personCount = savedFitness.persons ? parseInt(savedFitness.persons) : 1;
-                    document.getElementById('persons').value = personCount;
-                    document.getElementById('calorie-result').textContent = `Норма: ${savedFitness.targetCalories} ккал`;
-                    document.getElementById('days-nav').style.display = 'flex';
-                    markTodayButton();
-                }
-                showDay(activeDayIndex);
-                renderFinanceUI();
-                renderHabitsUI();
-                renderTodayDashboard();
-            } finally {
-                isRemoteUpdating = false;
-            }
-        }
-
-        let pushTimeout = null;
-        let lastPushedAt = 0;
-
-        async function doPushToCloud() {
-            if (!supabaseClient || !syncKey) return;
-            try {
-                const payload = getAppStatePayload();
-                lastPushedAt = payload.updatedAt;
-                const { error } = await supabaseClient
-                    .from('user_data')
-                    .upsert({ sync_key: syncKey, payload: payload, updated_at: new Date() });
-                if (error) throw error;
-                localStorage.setItem('lifeOS_sync_updated_at', String(payload.updatedAt));
-                updateCloudUI("☁️ Синхронно", "var(--success)");
-            } catch (err) {
-                console.error('Ошибка облака:', err);
-                updateCloudUI("⚠️ Ошибка сети", "var(--danger)");
-            }
-        }
-
-        function pushChangesToCloud() {
-            if (isRemoteUpdating || !supabaseClient || !syncKey) return;
-
-            updateCloudUI("☁️ Запись...", "var(--warning)");
-            clearTimeout(pushTimeout);
-            pushTimeout = setTimeout(() => {
-                pushTimeout = null;
-                doPushToCloud();
-            }, 500);
-        }
-
-        // Немедленно отправляем правку, не дожидаясь дебаунса, если вкладка
-        // скрывается/закрывается — иначе 500-мс задержка теряет изменения.
-        function flushPendingPush() {
-            if (pushTimeout === null) return;
-            clearTimeout(pushTimeout);
-            pushTimeout = null;
-            doPushToCloud();
-        }
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') flushPendingPush();
-        });
-        window.addEventListener('pagehide', flushPendingPush);
-
-        async function initCloudSync() {
-            if (!supabaseClient || !syncKey) {
-                updateCloudUI("🔑 Задайте ключ");
-                return;
-            }
-
-            updateCloudUI("⏳ Загрузка...", "var(--accent-primary)");
-
-            try {
-                const { data } = await supabaseClient
-                    .from('user_data')
-                    .select('payload')
-                    .eq('sync_key', syncKey)
-                    .maybeSingle();
-
-                const cloud = (data && data.payload) ? data.payload : null;
-                const localUpdatedAt = Number(localStorage.getItem('lifeOS_sync_updated_at') || 0);
-                const cloudUpdatedAt = cloud ? Number(cloud.updatedAt || 0) : 0;
-
-                if (cloud && cloudUpdatedAt >= localUpdatedAt) {
-                    // Облачная версия новее или равна локальной — применяем её.
-                    applyAppStatePayload(cloud);
-                    updateCloudUI("☁️ Синхронно", "var(--success)");
-                } else {
-                    // Локальные данные новее (правки офлайн) или облака ещё нет —
-                    // отправляем их в облако, чтобы не потерять изменения.
-                    pushChangesToCloud();
-                }
-            } catch (err) {
-                // Сетевая ошибка: НЕ затираем локальные данные облачными.
-                console.warn('Не удалось загрузить из облака:', err);
-                updateCloudUI("⚠️ Ошибка сети", "var(--danger)");
-            }
-
-            // Слушатель реального времени для синхронизации устройств.
-            // event: '*' — ловим и INSERT (создание строки другим устройством),
-            // и UPDATE. Перед подпиской отписываемся от старого канала, чтобы
-            // не плодить дубли обработчиков.
-            if (syncChannel) supabaseClient.removeChannel(syncChannel);
-            syncChannel = supabaseClient
-                .channel(`sync_${syncKey}`)
-                .on(
-                    'postgres_changes',
-                    { event: '*', schema: 'public', table: 'user_data', filter: `sync_key=eq.${syncKey}` },
-                    (msg) => {
-                        const incoming = (msg.payload && msg.payload.new) ? msg.payload.new.payload : null;
-                        if (!incoming) return;
-                        // Пропускаем эхо собственной записи: такой же updatedAt
-                        // мы уже отправили и сохранили локально.
-                        if (Number(incoming.updatedAt || 0) === lastPushedAt) return;
-                        applyAppStatePayload(incoming);
-                        updateCloudUI("☁️ Синхронно", "var(--success)");
-                    }
-                )
-                .subscribe();
-        }
-
         /* 1. ТЕМА И СИСТЕМНЫЕ БЭКАПЫ */
         function initTheme() {
             const isDark = localStorage.getItem('lifeOS_theme') === 'dark';
@@ -1313,7 +1106,6 @@
             const isDark = document.body.classList.contains('dark-mode');
             localStorage.setItem('lifeOS_theme', isDark ? 'dark' : 'light');
             updateThemeButtons(isDark);
-            pushChangesToCloud();
         }
 
         function updateThemeButtons(isDark) {
@@ -1357,22 +1149,7 @@
                     if (parsed.groceriesChecked) localStorage.setItem('lifeOS_checked_groceries', parsed.groceriesChecked);
                     if (parsed.theme) localStorage.setItem('lifeOS_theme', parsed.theme);
                     alert('Данные «Дневник» успешно восстановлены!');
-
-                    // ВАЖНО: если облако подключено, сначала отправляем восстановленные данные
-                    // в Supabase, и только потом перезагружаем страницу — иначе initCloudSync()
-                    // при загрузке затрёт только что импортированные данные облачным состоянием.
-                    if (supabaseClient && syncKey) {
-                        const payload = getAppStatePayload();
-                        supabaseClient
-                            .from('user_data')
-                            .upsert({ sync_key: syncKey, payload: payload, updated_at: new Date() })
-                            .then(({ error }) => {
-                                if (error) console.error('Не удалось сохранить импорт в облако:', error);
-                                location.reload();
-                            });
-                    } else {
-                        location.reload();
-                    }
+                    location.reload();
                 } catch(err) { alert('Ошибка чтения файла: ' + err.message); }
             };
             reader.readAsText(file);
@@ -1553,7 +1330,6 @@
             localStorage.setItem('lifeOS_eaten_meals', JSON.stringify(eatenMealsState));
             showDay(activeDayIndex);
             renderTodayDashboard();
-            pushChangesToCloud();
         }
 
         function calculateAndGenerateWeek() {
@@ -1574,7 +1350,6 @@
             markTodayButton();
             showDay(realTodayIndex);
             renderTodayDashboard();
-            pushChangesToCloud();
         }
 
         function markTodayButton() {
@@ -1718,7 +1493,6 @@
             personCount = parseInt(document.getElementById('persons').value);
             showDay(activeDayIndex);
             renderTodayDashboard();
-            pushChangesToCloud();
         }
 
         function setGroceryMode(m) {
@@ -1739,7 +1513,6 @@
             checkedGroceries[id] = !checkedGroceries[id];
             localStorage.setItem('lifeOS_checked_groceries', JSON.stringify(checkedGroceries));
             updateGroceryList();
-            pushChangesToCloud();
         }
 
         function updateGroceryList() {
@@ -1874,7 +1647,6 @@
             localStorage.setItem('lifeOS_fin_data', JSON.stringify(financeState));
             renderFinanceUI();
             renderTodayDashboard();
-            pushChangesToCloud();
         }
 
         function saveFinSettings() {
@@ -2166,7 +1938,6 @@
             localStorage.setItem('lifeOS_habits_data', JSON.stringify(habitsState));
             renderHabitsUI();
             renderTodayDashboard();
-            pushChangesToCloud();
         }
 
         function toggleHabit(id, dateKey) {
@@ -2362,8 +2133,6 @@
             initFinance();
             initHabits();
             renderTodayDashboard();
-
-            initCloudSync();
         };
     </script>
 </body>
