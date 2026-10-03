@@ -931,10 +931,16 @@
                         <div style="background: var(--card-sub); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin-bottom: 16px;">
                             <label>Мой доход в месяц (₽):</label>
                             <div style="display: flex; gap: 8px; align-items: center;">
-                                <input type="number" id="fin-income" placeholder="100000" style="margin: 0;" oninput="saveIncome()">
-                                <button class="btn-secondary" onclick="saveIncome()">Сохранить</button>
+                                <input type="number" id="fin-income" placeholder="100000" style="margin: 0;" oninput="saveFinSettings()">
+                                <button class="btn-secondary" onclick="saveFinSettings()">Сохранить</button>
                             </div>
-                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">От дохода считаются 50 / 30 / 20 и дневной лимит трат.</div>
+
+                            <label style="margin-top: 10px; display: block;">Обязательные платежи в месяц (₽):</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="number" id="fin-fixed" placeholder="напр. 45000" style="margin: 0;" oninput="saveFinSettings()">
+                                <button class="btn-secondary" onclick="saveFinSettings()">Сохранить</button>
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">От дохода считаются 50 / 30 / 20 и дневной лимит трат. Обязательные платежи (аренда, ЖКХ, кредиты, подписки) в лимит не входят и уменьшаются по мере оплаты.</div>
                         </div>
 
                         <div>
@@ -1574,6 +1580,7 @@
             expense: [
                 { id: "groceries", name: "🛒 Продукты", rule: "needs" },
                 { id: "rent", name: "🏠 Жилье & ЖКХ", rule: "needs" },
+                { id: "obligations", name: "🏦 Обязательные платежи", rule: "needs" },
                 { id: "transport", name: "🚗 Транспорт", rule: "needs" },
                 { id: "wine", name: "🍾 Вино & Ужины", rule: "wants" },
                 { id: "shopping", name: "🛍️ Покупки", rule: "wants" },
@@ -1589,8 +1596,12 @@
             ]
         };
 
+        /* Категории «обязательных» платежей: их сумма резервируется и не попадает
+           в дневной лимит трат, пока платёж не проведён. */
+        const FIXED_CATEGORY_IDS = ['rent', 'obligations'];
+
         let financeState = {
-            settings: { monthlyIncome: 160000 }, // «Мой доход в месяц» — база для 50/30/20 и дневного лимита
+            settings: { monthlyIncome: 160000, monthlyFixed: 0 }, // доход и обязательные платежи месяца — база для 50/30/20 и дневного лимита
             accounts: [
                 { id: "acc_1", name: "Основная карта", balance: 65000, type: "card", rate: 0 },
                 { id: "acc_2", name: "Вклад (Подушка)", balance: 320000, type: "deposit", rate: 18.0 },
@@ -1613,14 +1624,21 @@
             if (saved) {
                 try { financeState = JSON.parse(saved); } catch(e){}
             }
-            // Миграция для данных, сохранённых до появления поля «Мой доход»:
-            // подставляем сумму последней доходной операции (иначе 0).
-            if (!financeState.settings || typeof financeState.settings.monthlyIncome !== 'number') {
+            // Миграция для данных, сохранённых до появления полей «Мой доход» и
+            // «Обязательные платежи»: доход берём из последней доходной операции,
+            // обязательства не угадываем (0 — значит резерв не создаётся).
+            if (!financeState.settings || typeof financeState.settings !== 'object') financeState.settings = {};
+            const st = financeState.settings;
+            if (typeof st.monthlyIncome !== 'number') {
                 const lastIncome = (financeState.transactions || []).find(t => t.type === 'income');
-                financeState.settings = { monthlyIncome: lastIncome ? lastIncome.amount : 0 };
+                st.monthlyIncome = lastIncome ? lastIncome.amount : 0;
             }
+            if (typeof st.monthlyFixed !== 'number') st.monthlyFixed = 0;
+
             const incomeInput = document.getElementById('fin-income');
-            if (incomeInput) incomeInput.value = financeState.settings.monthlyIncome || '';
+            if (incomeInput) incomeInput.value = st.monthlyIncome || '';
+            const fixedInput = document.getElementById('fin-fixed');
+            if (fixedInput) fixedInput.value = st.monthlyFixed || '';
             setTxType('expense');
             renderFinanceUI();
         }
@@ -1631,11 +1649,12 @@
             renderTodayDashboard();
         }
 
-        function saveIncome() {
-            const el = document.getElementById('fin-income');
-            if (!el) return;
-            if (!financeState.settings) financeState.settings = { monthlyIncome: 0 };
-            financeState.settings.monthlyIncome = Math.max(0, parseFloat(el.value) || 0);
+        function saveFinSettings() {
+            if (!financeState.settings) financeState.settings = { monthlyIncome: 0, monthlyFixed: 0 };
+            const incEl = document.getElementById('fin-income');
+            const fixEl = document.getElementById('fin-fixed');
+            financeState.settings.monthlyIncome = Math.max(0, parseFloat(incEl && incEl.value) || 0);
+            financeState.settings.monthlyFixed = Math.max(0, parseFloat(fixEl && fixEl.value) || 0);
             saveFinanceData();
         }
 
@@ -1771,10 +1790,11 @@
             document.getElementById('fin-net-worth').textContent = `${Math.round(netWorth).toLocaleString('ru-RU')} ₽`;
 
             const incomeInput = document.getElementById('fin-income');
+            const fixedInput = document.getElementById('fin-fixed');
             const income = Math.max(0, (financeState.settings && financeState.settings.monthlyIncome) || 0);
-            if (incomeInput && document.activeElement !== incomeInput) {
-                incomeInput.value = income > 0 ? income : '';
-            }
+            const monthlyFixed = Math.max(0, (financeState.settings && financeState.settings.monthlyFixed) || 0);
+            if (incomeInput && document.activeElement !== incomeInput) incomeInput.value = income > 0 ? income : '';
+            if (fixedInput && document.activeElement !== fixedInput) fixedInput.value = monthlyFixed > 0 ? monthlyFixed : '';
 
             // План по правилу 50 / 30 / 20 — от «Моего дохода в месяц»
             const needsPlan = income * 0.5; // 50% — нужды
@@ -1790,6 +1810,7 @@
             let needsSpent = 0;
             let wantsSpent = 0;
             let savingsDone = 0;
+            let fixedSpent = 0; // уже оплаченные обязательные платежи месяца
             let passiveMonthly = 0;
 
             financeState.accounts.forEach(a => {
@@ -1805,6 +1826,7 @@
                 if (rule === 'needs') needsSpent += t.amount;
                 if (rule === 'wants') wantsSpent += t.amount;
                 if (rule === 'savings') savingsDone += t.amount;
+                if (FIXED_CATEGORY_IDS.indexOf(t.categoryId) > -1) fixedSpent += t.amount;
             });
 
             document.getElementById('fin-month-income-badge').textContent = income > 0
@@ -1814,15 +1836,22 @@
                 ? `${Math.round((savingsDone / income) * 100)}%`
                 : '0%';
 
-            // Дневной лимит трат = остаток «желаний», делённый на оставшиеся дни месяца
+            // Дневной лимит = (остаток нужд + остаток желаний − резерв обязательных платежей)
+            // делённый на оставшиеся дни месяца. Сбережения (20%) не трогаем.
+            const remainingNeeds = Math.max(0, needsPlan - needsSpent);
             const remainingWants = Math.max(0, wantsPlan - wantsSpent);
-            const dailyBudget = income > 0 ? Math.round(remainingWants / daysLeft) : 0;
+            // Резерв — сколько обязательных платежей ещё предстоит оплатить:
+            // он сам уменьшается по мере проведения платежей по FIXED_CATEGORY_IDS
+            // и никогда не превышает остаток «нужд».
+            const reserve = Math.min(Math.max(0, monthlyFixed - fixedSpent), remainingNeeds);
+            const freePool = Math.max(0, remainingNeeds + remainingWants - reserve);
+            const dailyBudget = income > 0 ? Math.round(freePool / daysLeft) : 0;
 
             document.getElementById('fin-daily-budget').textContent = income > 0
                 ? `${dailyBudget.toLocaleString('ru-RU')} ₽/день`
                 : 'Укажите доход';
             document.getElementById('fin-days-left').textContent = income > 0
-                ? `${Math.round(remainingWants).toLocaleString('ru-RU')} ₽ из ${Math.round(wantsPlan).toLocaleString('ru-RU')} ₽ • осталось ${daysLeft} дн.`
+                ? `${Math.round(freePool).toLocaleString('ru-RU')} ₽ свободно${reserve > 0 ? ` • резерв ${Math.round(reserve).toLocaleString('ru-RU')} ₽` : ''} • осталось ${daysLeft} дн.`
                 : 'задайте «Мой доход в месяц»';
 
             const liquid = financeState.accounts.filter(a => a.type === 'deposit' || a.type === 'card').reduce((s, a) => s + a.balance, 0);
